@@ -291,17 +291,34 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	return binaryRespEnc, r
 }
 
+// TargetRewrite represents a rewritten target request.
+type TargetRewrite struct {
+	Scheme string
+	Host   string
+}
+
 // HttpRequestHandler handles HTTP requests to produce responses.
 type HttpRequestHandler interface {
 	// Handle takes a http.Request and resolves it to produce a http.Response.
 	Handle(req *http.Request, metrics Metrics) (*http.Response, error)
 }
 
+// HttpClientRequestHandler represents a HttpRequestHandler that handles requests by sending them
+// with an http.Client
+type HttpClientRequestHandler struct {
+	client *http.Client
+}
+
+func (h HttpClientRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
+	return h.client.Do(req)
+}
+
 // FilteredHttpRequestHandler represents a HttpRequestHandler that restricts
 // outbound HTTP requests to an allowed set of targets.
 type FilteredHttpRequestHandler struct {
-	client             *http.Client
+	client             HttpRequestHandler
 	allowedOrigins     map[string]bool
+	targetRewrites     map[string]TargetRewrite
 	logForbiddenErrors bool
 }
 
@@ -320,7 +337,14 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		}
 	}
 
-	resp, err := h.client.Do(req)
+	if h.targetRewrites != nil {
+		if newTarget, ok := h.targetRewrites[req.URL.Host]; ok {
+			req.URL.Scheme = newTarget.Scheme
+			req.URL.Host = newTarget.Host
+		}
+	}
+
+	resp, err := h.client.Handle(req, metrics)
 	if err != nil {
 		metrics.Fire(metricsResultTargetRequestFailed)
 		return nil, err
